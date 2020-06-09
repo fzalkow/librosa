@@ -27,9 +27,8 @@ setup(
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",
         "Topic :: Multimedia :: Sound/Audio :: Analysis",
+        "Framework :: Matplotlib",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.4",
-        "Programming Language :: Python :: 3.5",
         "Programming Language :: Python :: 3.6",
         "Programming Language :: Python :: 3.7",
         "Programming Language :: Python :: 3.8",
@@ -39,14 +38,16 @@ setup(
     install_requires=[
         'audioread >= 2.0.0',
         'numpy >= 1.15.0',
+        'packaging >= 18',
         'scipy >= 1.0.0',
         'scikit-learn >= 0.14.0, != 0.19.0',
-        'joblib >= 0.12',
+        'joblib >= 0.14',
         'decorator >= 3.0.0',
         'resampy >= 0.2.2',
         'numba >= 0.43.0',
         'soundfile >= 0.9.0',
     ],
+    python_requires='>=3.6',
     extras_require={
         'docs': ['numpydoc', 'sphinx!=1.3.1', 'sphinx_rtd_theme',
                  'matplotlib >= 2.0.0',
@@ -57,7 +58,8 @@ setup(
                   'pytest-mpl',
                   'pytest-cov',
                   'pytest',
-                  'contextlib2'],
+                  'contextlib2',
+                  'samplerate'],
         'display': ['matplotlib >= 1.5'],
     }
 )

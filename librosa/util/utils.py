@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """Utility functions"""
 
+import warnings
 import scipy.ndimage
 import scipy.sparse
 
@@ -32,12 +33,16 @@ __all__ = ['MAX_MEM_BLOCK',
            'cyclic_gradient']
 
 
-def frame(x, frame_length=2048, hop_length=512, axis=-1):
+def frame(x, frame_length, hop_length, axis=-1):
     '''Slice a data array into (overlapping) frames.
 
     This implementation uses low-level stride manipulation to avoid
     making a copy of the data.  The resulting frame representation
-    is a new view of the input data.
+    is a new view of the same input data.
+
+    However, if the input data is not contiguous in memory, a warning
+    will be issued and the output will be a full copy, rather than
+    a view of the input data.
 
     For example, a one-dimensional input `x = [0, 1, 2, 3, 4, 5, 6]`
     can be framed with frame length 3 and hop length 2 in two ways.
@@ -67,8 +72,7 @@ def frame(x, frame_length=2048, hop_length=512, axis=-1):
     Parameters
     ----------
     x : np.ndarray
-        Time series to frame. Must be contiguous in memory, see the "Raises"
-        section below for more information.
+        Array to frame
 
     frame_length : int > 0 [scalar]
         Length of the frame
@@ -97,17 +101,14 @@ def frame(x, frame_length=2048, hop_length=512, axis=-1):
     Raises
     ------
     ParameterError
-        If `x` is not contiguous in memory or not an `np.ndarray`.
+        If `x` is not an `np.ndarray`.
 
         If `x.shape[axis] < frame_length`, there is not enough data to fill one frame.
 
         If `hop_length < 1`, frames cannot advance.
 
         If `axis` is not 0 or -1.  Framing is only supported along the first or last axis.
-            If `axis=-1` (the default), then `x` must be "F-contiguous".
-            If `axis=0`, then `x` must be "C-contiguous".
 
-        If the contiguity of `x` is incompatible with the framing axis.
 
     See Also
     --------
@@ -175,26 +176,28 @@ def frame(x, frame_length=2048, hop_length=512, axis=-1):
     if hop_length < 1:
         raise ParameterError('Invalid hop_length: {:d}'.format(hop_length))
 
+    if axis == -1 and not x.flags['F_CONTIGUOUS']:
+        warnings.warn('librosa.util.frame called with axis={} '
+                      'on a non-contiguous input. This will result in a copy.'.format(axis))
+        x = np.asfortranarray(x)
+    elif axis == 0 and not x.flags['C_CONTIGUOUS']:
+        warnings.warn('librosa.util.frame called with axis={} '
+                      'on a non-contiguous input. This will result in a copy.'.format(axis))
+        x = np.ascontiguousarray(x)
+
     n_frames = 1 + (x.shape[axis] - frame_length) // hop_length
     strides = np.asarray(x.strides)
 
     new_stride = np.prod(strides[strides > 0] // x.itemsize) * x.itemsize
 
     if axis == -1:
-        if not x.flags['F_CONTIGUOUS']:
-            raise ParameterError('Input array must be F-contiguous '
-                                 'for framing along axis={}'.format(axis))
-
         shape = list(x.shape)[:-1] + [frame_length, n_frames]
         strides = list(strides) + [hop_length * new_stride]
 
     elif axis == 0:
-        if not x.flags['C_CONTIGUOUS']:
-            raise ParameterError('Input array must be C-contiguous '
-                                 'for framing along axis={}'.format(axis))
-
         shape = [n_frames, frame_length] + list(x.shape)[1:]
         strides = [hop_length * new_stride] + list(strides)
+
     else:
         raise ParameterError('Frame axis={} must be either 0 or -1'.format(axis))
 
@@ -203,7 +206,13 @@ def frame(x, frame_length=2048, hop_length=512, axis=-1):
 
 @cache(level=20)
 def valid_audio(y, mono=True):
-    '''Validate whether a variable contains valid, mono audio data.
+    '''Validate whether a variable contains valid audio data.
+
+    If `mono=True`, then `y` is only considered valid if it has shape
+    `(N,)` (number of samples).
+
+    If `mono=False`, then `y` may be either monophonic, or have shape
+    `(2, N)` (stereo) or `(K, N)` for `K>=2` for general multi-channel.
 
 
     Parameters
@@ -212,7 +221,7 @@ def valid_audio(y, mono=True):
       The input data to validate
 
     mono : bool
-      Whether or not to force monophonic audio
+      Whether or not to require monophonic audio
 
     Returns
     -------
@@ -227,8 +236,8 @@ def valid_audio(y, mono=True):
             - `y.dtype` is not floating-point
             - `mono == True` and `y.ndim` is not 1
             - `mono == False` and `y.ndim` is not 1 or 2
+            - `mono == False` and `y.ndim == 2` but `y.shape[0] == 1`
             - `np.isfinite(y).all()` is False
-            - `y.flags["F_CONTIGUOUS"]` is False
 
     Notes
     -----
@@ -249,8 +258,6 @@ def valid_audio(y, mono=True):
 
     See also
     --------
-    stack
-    numpy.asfortranarray
     numpy.float32
     '''
 
@@ -268,12 +275,12 @@ def valid_audio(y, mono=True):
         raise ParameterError('Audio data must have shape (samples,) or (channels, samples). '
                              'Received shape={}'.format(y.shape))
 
+    elif y.ndim == 2 and y.shape[0] < 2:
+        raise ParameterError('Mono data must have shape (samples,). '
+                             'Received shape={}'.format(y.shape))
+
     if not np.isfinite(y).all():
         raise ParameterError('Audio buffer is not finite everywhere')
-
-    if not y.flags["F_CONTIGUOUS"]:
-        raise ParameterError('Audio buffer is not Fortran-contiguous. '
-            'Use numpy.asfortranarray to ensure Fortran contiguity.')
 
     return True
 

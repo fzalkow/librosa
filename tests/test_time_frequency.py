@@ -113,6 +113,34 @@ def test_hz_to_octs(tuning, bins_per_octave):
 
 
 @pytest.mark.parametrize(
+    "A4,bins_per_octave,tuning",
+    [
+        (440.0, 12, 0.0),
+        ([440.0, 444.0], 24, [0.0, 0.31335]),
+        ([432.0], 12, [-0.317667]),
+        (432.0, 36, -0.953)
+    ],
+)
+def test_A4_to_tuning(A4, bins_per_octave, tuning):
+    tuning_out = librosa.A4_to_tuning(A4=A4, bins_per_octave=bins_per_octave)
+    assert np.allclose(np.asarray(tuning), tuning_out)
+
+
+@pytest.mark.parametrize(
+    "tuning,bins_per_octave,A4",
+    [
+        (0.0, 12, 440.0),
+        ([-0.2], 24, [437.466]),
+        ([0.1, 0.9], 36, [440.848, 447.691]),
+        (0.0, 24, 440.0)
+    ],
+)
+def test_tuning_to_A4(tuning, bins_per_octave, A4):
+    A4_out = librosa.tuning_to_A4(tuning=tuning, bins_per_octave=bins_per_octave)
+    assert np.allclose(np.asarray(A4), A4_out)
+
+
+@pytest.mark.parametrize(
     "tuning,octave",
     [(None, None), (None, 1), (None, 2), (None, 3), (-25, 1), (-25, 2), (-25, 3), (0, 1), (0, 2), (0, 3)],
 )
@@ -327,6 +355,76 @@ def test_A_weighting(min_db):
     # Check that the db cap works
     if min_db is not None:
         assert not np.any(a_range < min_db)
+
+
+@pytest.mark.parametrize("min_db", [None, -40, -80])
+def test_B_weighting(min_db):
+
+    # Check that 1KHz is around 0dB
+    b_khz = librosa.B_weighting(1000.0, min_db=min_db)
+    assert np.allclose(b_khz, 0, atol=1e-3)
+
+    b_range = librosa.B_weighting(np.linspace(2e1, 2e4), min_db=min_db)
+    # Check that the db cap works
+    if min_db is not None:
+        assert not np.any(b_range < min_db)
+
+
+@pytest.mark.parametrize("min_db", [None, -40, -80])
+def test_C_weighting(min_db):
+
+    # Check that 1KHz is around 0dB
+    c_khz = librosa.C_weighting(1000.0, min_db=min_db)
+    assert np.allclose(c_khz, 0, atol=1e-3)
+
+    c_range = librosa.B_weighting(np.linspace(2e1, 2e4), min_db=min_db)
+    # Check that the db cap works
+    if min_db is not None:
+        assert not np.any(c_range < min_db)
+
+
+@pytest.mark.parametrize("min_db", [None, -40, -80])
+def test_D_weighting(min_db):
+
+    # Check that 1KHz is around 0dB
+    d_khz = librosa.D_weighting(1000.0, min_db=min_db)
+    assert np.allclose(d_khz, 0, atol=1e-3)
+
+    d_range = librosa.D_weighting(np.linspace(2e1, 2e4), min_db=min_db)
+    # Check that the db cap works
+    if min_db is not None:
+        assert not np.any(d_range < min_db)
+
+
+@pytest.mark.parametrize("min_db", [None, -40, -80])
+def test_Z_weighting(min_db):
+    # Check that 1KHz is around 0dB
+    d_khz = librosa.Z_weighting(np.linspace(2e1, 2e4), min_db=min_db)
+    assert np.allclose(d_khz, 0, atol=1e-3)
+
+
+@pytest.mark.parametrize(
+    "kind", list(librosa.core.time_frequency.WEIGHTING_FUNCTIONS))
+def test_frequency_weighting(kind):
+    freq = np.linspace(2e1, 2e4)
+    assert np.allclose(
+        librosa.frequency_weighting(freq, kind),
+        librosa.core.time_frequency.WEIGHTING_FUNCTIONS[kind](freq),
+        0, atol=1e-3)
+
+
+@pytest.mark.parametrize(
+    "kinds", ['AZC', ['A', 'Z', 'C']])
+def test_multi_frequency_weighting(kinds):
+    freq = np.linspace(2e1, 2e4)
+    assert np.allclose(
+        librosa.multi_frequency_weighting(freq, kinds),
+        np.stack([
+            librosa.A_weighting(freq),
+            librosa.Z_weighting(freq),
+            librosa.C_weighting(freq),
+        ]),
+        0, atol=1e-3)
 
 
 def test_samples_like():
