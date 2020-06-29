@@ -23,13 +23,13 @@ def estimate_tuning(y=None, sr=22050, S=None, n_fft=2048,
         audio signal
 
     sr : number > 0 [scalar]
-        audio sampling rate of `y`
+        audio sampling rate of ``y``
 
     S: np.ndarray [shape=(d, t)] or None
         magnitude or power spectrogram
 
     n_fft : int > 0 [scalar] or None
-        number of FFT bins to use, if `y` is provided.
+        number of FFT bins to use, if ``y`` is provided.
 
     resolution : float in `(0, 1)`
         Resolution of the tuning as a fraction of a bin.
@@ -53,28 +53,28 @@ def estimate_tuning(y=None, sr=22050, S=None, n_fft=2048,
 
     Examples
     --------
-    >>> # With time-series input
-    >>> y, sr = librosa.load(librosa.util.example_audio_file())
+    With time-series input
+
+    >>> y, sr = librosa.load(librosa.ex('trumpet'))
     >>> librosa.estimate_tuning(y=y, sr=sr)
-    0.089999999999999969
+    -0.08000000000000002
 
-    >>> # In tenths of a cent
-    >>> y, sr = librosa.load(librosa.util.example_audio_file())
+    In tenths of a cent
+
     >>> librosa.estimate_tuning(y=y, sr=sr, resolution=1e-3)
-    0.093999999999999972
+    -0.016000000000000014
 
-    >>> # Using spectrogram input
-    >>> y, sr = librosa.load(librosa.util.example_audio_file())
+    Using spectrogram input
+
     >>> S = np.abs(librosa.stft(y))
     >>> librosa.estimate_tuning(S=S, sr=sr)
-    0.089999999999999969
+    -0.08000000000000002
 
-    >>> # Using pass-through arguments to `librosa.piptrack`
-    >>> y, sr = librosa.load(librosa.util.example_audio_file())
+    Using pass-through arguments to `librosa.piptrack`
+
     >>> librosa.estimate_tuning(y=y, sr=sr, n_fft=8192,
     ...                         fmax=librosa.note_to_hz('G#9'))
-    0.070000000000000062
-
+    -0.08000000000000002
     '''
 
     pitch, mag = piptrack(y=y, sr=sr, S=S, n_fft=n_fft, **kwargs)
@@ -127,12 +127,13 @@ def pitch_tuning(frequencies, resolution=0.01, bins_per_octave=12):
     0.25
 
     >>> # Track frequencies from a real spectrogram
-    >>> y, sr = librosa.load(librosa.util.example_audio_file())
-    >>> pitches, magnitudes, stft = librosa.ifptrack(y, sr)
+    >>> y, sr = librosa.load(librosa.ex('trumpet'))
+    >>> freqs, times, mags = librosa.reassigned_spectrogram(y, sr,
+    ...                                                     fill_nan=True)
     >>> # Select out pitches with high energy
-    >>> pitches = pitches[magnitudes > np.median(magnitudes)]
-    >>> librosa.pitch_tuning(pitches)
-    0.089999999999999969
+    >>> freqs = freqs[mags > np.median(mags)]
+    >>> librosa.pitch_tuning(freqs)
+    -0.07
 
     '''
 
@@ -169,9 +170,9 @@ def piptrack(y=None, sr=22050, S=None, n_fft=2048, hop_length=None,
              ref=None):
     '''Pitch tracking on thresholded parabolically-interpolated STFT.
 
-    This implementation uses the parabolic interpolation method described by [1]_.
+    This implementation uses the parabolic interpolation method described by [#]_.
 
-    .. [1] https://ccrma.stanford.edu/~jos/sasp/Sinusoidal_Peak_Interpolation.html
+    .. [#] https://ccrma.stanford.edu/~jos/sasp/Sinusoidal_Peak_Interpolation.html
 
     Parameters
     ----------
@@ -179,22 +180,22 @@ def piptrack(y=None, sr=22050, S=None, n_fft=2048, hop_length=None,
         audio signal
 
     sr : number > 0 [scalar]
-        audio sampling rate of `y`
+        audio sampling rate of ``y``
 
     S: np.ndarray [shape=(d, t)] or None
         magnitude or power spectrogram
 
     n_fft : int > 0 [scalar] or None
-        number of FFT bins to use, if `y` is provided.
+        number of FFT bins to use, if ``y`` is provided.
 
     hop_length : int > 0 [scalar] or None
         number of samples to hop
 
     threshold : float in `(0, 1)`
-        A bin in spectrum `S` is considered a pitch when it is greater than
-        `threshold*ref(S)`.
+        A bin in spectrum ``S`` is considered a pitch when it is greater than
+        ``threshold * ref(S)``.
 
-        By default, `ref(S)` is taken to be `max(S, axis=0)` (the maximum value in
+        By default, ``ref(S)`` is taken to be ``max(S, axis=0)`` (the maximum value in
         each column).
 
     fmin : float > 0 [scalar]
@@ -204,64 +205,61 @@ def piptrack(y=None, sr=22050, S=None, n_fft=2048, hop_length=None,
         upper frequency cutoff.
 
     win_length : int <= n_fft [scalar]
-        Each frame of audio is windowed by `window()`.
+        Each frame of audio is windowed by ``window``.
         The window will be of length `win_length` and then padded
-        with zeros to match `n_fft`.
+        with zeros to match ``n_fft``.
 
         If unspecified, defaults to ``win_length = n_fft``.
 
     window : string, tuple, number, function, or np.ndarray [shape=(n_fft,)]
         - a window specification (string, tuple, or number);
           see `scipy.signal.get_window`
-        - a window function, such as `scipy.signal.hanning`
-        - a vector or array of length `n_fft`
+        - a window function, such as `scipy.signal.windows.hann`
+        - a vector or array of length ``n_fft``
 
         .. see also:: `filters.get_window`
 
     center : boolean
-        - If `True`, the signal `y` is padded so that frame
-          `t` is centered at `y[t * hop_length]`.
-        - If `False`, then frame `t` begins at `y[t * hop_length]`
+        - If ``True``, the signal ``y`` is padded so that frame
+          ``t`` is centered at ``y[t * hop_length]``.
+        - If ``False``, then frame ``t`` begins at ``y[t * hop_length]``
 
     pad_mode : string
-        If `center=True`, the padding mode to use at the edges of the signal.
+        If ``center=True``, the padding mode to use at the edges of the signal.
         By default, STFT uses reflection padding.
 
     ref : scalar or callable [default=np.max]
-        If scalar, the reference value against which `S` is compared for determining
+        If scalar, the reference value against which ``S`` is compared for determining
         pitches.
 
-        If callable, the reference value is computed as `ref(S, axis=0)`.
-
-    .. note::
-        One of `S` or `y` must be provided.
-
-        If `S` is not given, it is computed from `y` using
-        the default parameters of `librosa.core.stft`.
+        If callable, the reference value is computed as ``ref(S, axis=0)``.
 
     Returns
     -------
-    pitches : np.ndarray [shape=(d, t)]
-    magnitudes : np.ndarray [shape=(d,t)]
-        Where `d` is the subset of FFT bins within `fmin` and `fmax`.
+    pitches, magnitudes : np.ndarray [shape=(d, t)]
+        Where ``d`` is the subset of FFT bins within ``fmin`` and ``fmax``.
 
-        `pitches[f, t]` contains instantaneous frequency at bin
-        `f`, time `t`
+        ``pitches[f, t]`` contains instantaneous frequency at bin
+        ``f``, time ``t``
 
-        `magnitudes[f, t]` contains the corresponding magnitudes.
+        ``magnitudes[f, t]`` contains the corresponding magnitudes.
 
-        Both `pitches` and `magnitudes` take value 0 at bins
+        Both ``pitches`` and ``magnitudes`` take value 0 at bins
         of non-maximal magnitude.
 
     Notes
     -----
     This function caches at level 30.
 
+    One of ``S`` or ``y`` must be provided.
+    If ``S`` is not given, it is computed from ``y`` using
+    the default parameters of `librosa.stft`.
+
     Examples
     --------
     Computing pitches from a waveform input
 
-    >>> y, sr = librosa.load(librosa.util.example_audio_file())
+    >>> y, sr = librosa.load(librosa.ex('trumpet'))
     >>> pitches, magnitudes = librosa.piptrack(y=y, sr=sr)
 
     Or from a spectrogram input

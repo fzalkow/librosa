@@ -53,18 +53,13 @@ def test_load(infile):
 def test_load_resample(res_type):
 
     sr_target = 16000
-    offset = 10
-    duration = 5
+    fn = librosa.ex('trumpet')
 
-    y_native, sr = librosa.load(
-        librosa.util.example_audio_file(), sr=None, offset=offset, duration=duration, res_type=res_type
-    )
+    y_native, sr = librosa.load(fn, sr=None, res_type=res_type)
 
     y2 = librosa.resample(y_native, sr, sr_target, res_type=res_type)
 
-    y, _ = librosa.load(
-        librosa.util.example_audio_file(), sr=sr_target, offset=offset, duration=duration, res_type=res_type
-    )
+    y, _ = librosa.load(fn, sr=sr_target, res_type=res_type)
 
     assert np.allclose(y2, y)
 
@@ -208,7 +203,7 @@ def test_resample_scale(resample_mono, res_type, sr_out):
 @pytest.mark.parametrize("sr_in, sr_out", [(100, 100.1), (100.1, 100)])
 @pytest.mark.xfail(raises=librosa.ParameterError)
 def test_resample_poly_float(sr_in, sr_out):
-    y = np.empty(128)
+    y = np.zeros(128)
     librosa.resample(y, sr_in, sr_out, res_type="polyphase")
 
 
@@ -243,9 +238,21 @@ def test_stft(infile):
     assert np.allclose(D, DATA["D"].conj())
 
 
+@pytest.mark.xfail(raises=librosa.ParameterError)
+def test_stft_toolong_left():
+    y = np.zeros((128,))
+    librosa.stft(y, n_fft=2048, center=False)
+
+
+def test_stft_toolong_center():
+    y = np.zeros((128,))
+    with pytest.warns(UserWarning):
+        librosa.stft(y, n_fft=2048, center=True)
+
+
 def test_stft_winsizes():
     # Test for issue #1095
-    x = np.empty(1000000)
+    x = np.zeros(1000000)
 
     for power in range(12, 17):
         N = 2 ** power
@@ -648,7 +655,7 @@ def test_get_duration_buffer(sr, dur):
 @pytest.mark.parametrize("n_fft", [512, 2048])
 @pytest.mark.parametrize("hop_length", [256, 512])
 def test_get_duration_specgram(sr, dur, n_fft, hop_length, center):
-    z = np.empty(int(sr * dur))
+    z = np.zeros(int(sr * dur))
     S = librosa.util.frame(z, frame_length=(n_fft // 2 + 1), hop_length=hop_length)
 
     dur_est = librosa.get_duration(S=S, sr=sr, n_fft=n_fft, hop_length=hop_length, center=center)
@@ -1348,6 +1355,36 @@ def test_iirt_flayout1(y_44100):
     y = y_44100
     sr = 44100
     librosa.iirt(y, hop_length=2205, win_length=4410, flayout="foo")
+
+
+def test_iirt_peaks():
+    # Test for PR #1157
+
+    Fs = 4000
+    length = 180
+    click_times = [10, 50, 90, 130, 170]
+
+    x = np.zeros(length * Fs)
+    for click in click_times:
+        x[click * Fs] = 1
+
+    win_length = 200
+    hop_length = 50
+    center_freqs = librosa.midi_to_hz(np.arange(40, 95))
+    sample_rates = np.asarray(len(np.arange(40, 46)) * [1000, ] +
+                                  len(np.arange(46, 80)) * [1750, ] +
+                                  len(np.arange(80, 95)) * [4000, ])
+
+    X = librosa.iirt(x, center_freqs=center_freqs, sample_rates=sample_rates,
+                     win_length=win_length, hop_length=hop_length)
+
+    for cur_band in X:
+        cur_peaks = scipy.signal.find_peaks(cur_band, height=np.mean(cur_band),
+                                            distance=1000)[0]
+        assert len(cur_peaks) == 5
+
+        cur_peak_times = cur_peaks * hop_length / Fs
+        assert all(abs(cur_peak_times - click_times) < (2 * win_length / Fs))
 
 
 @pytest.fixture(scope="module")

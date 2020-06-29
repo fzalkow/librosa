@@ -22,6 +22,7 @@ from test_core import srand
 np.set_printoptions(precision=3)
 
 
+# TODO: remove at 0.9
 def test_example_audio_file():
 
     assert os.path.exists(librosa.util.example_audio_file())
@@ -334,8 +335,8 @@ def test_axis_sort(ndim, axis, index, value):
 @pytest.mark.parametrize(
     "int_from, int_to",
     [
-        (np.asarray([[0, 2], [0, 4], [3, 6]]), np.empty((0, 2), dtype=int)),
-        (np.empty((0, 2), dtype=int), np.asarray([[0, 2], [0, 4], [3, 6]])),
+        (np.asarray([[0, 2], [0, 4], [3, 6]]), np.zeros((0, 2), dtype=int)),
+        (np.zeros((0, 2), dtype=int), np.asarray([[0, 2], [0, 4], [3, 6]])),
     ],
 )
 @pytest.mark.xfail(raises=librosa.ParameterError)
@@ -522,6 +523,18 @@ def test_sparsify_rows_ndimfail(ndim):
 @pytest.mark.parametrize("X", [np.ones((3, 3))])
 def test_sparsify_rows_badquantile(X, quantile):
     librosa.util.sparsify_rows(X, quantile=quantile)
+
+
+@pytest.mark.parametrize('dtype', [None, np.float32, np.float64])
+@pytest.mark.parametrize('ref_dtype', [np.float32, np.float64])
+def test_sparsify_rows_dtype(dtype, ref_dtype):
+    x = np.ones(10, dtype=ref_dtype)
+    xs = librosa.util.sparsify_rows(x, dtype=dtype)
+
+    if dtype is None:
+        assert xs.dtype == x.dtype
+    else:
+        assert xs.dtype == dtype
 
 
 @pytest.mark.parametrize("ndim", [1, 2])
@@ -1116,3 +1129,41 @@ def test_stack_consistent(x, axis):
     assert np.allclose(xs, xsnp)
     if axis != 0:
         assert xs.flags["C_CONTIGUOUS"]
+
+
+@pytest.mark.parametrize('key', ['trumpet', 'brahms', 'nutcracker', 'choice'])
+@pytest.mark.parametrize('hq', [False, True])
+def test_example(key, hq):
+
+    fn = librosa.example(key, hq=hq)
+    assert os.path.exists(fn)
+
+
+@pytest.mark.xfail(raises=librosa.ParameterError)
+def test_example_fail():
+    librosa.example('no such track')
+
+
+@pytest.mark.parametrize('key', ['trumpet', 'brahms', 'nutcracker', 'choice', 'fishin'])
+def test_example_info(key):
+
+    librosa.util.example_info(key)
+
+
+def test_list_examples():
+    librosa.util.list_examples()
+
+
+@pytest.mark.parametrize('dtype,target', [(np.float32, np.complex64), (np.float64, np.complex128), (np.int32, np.complex64), (np.complex128, np.complex128)])
+def test_dtype_r2c(dtype, target):
+    inf_type = librosa.util.dtype_r2c(dtype)
+
+    # better to do a bidirectional subtype test than strict equality here
+    assert np.issubdtype(inf_type, target) and np.issubdtype(target, inf_type)
+
+@pytest.mark.parametrize('dtype,target', [(np.float32, np.float32), (np.complex64, np.float32), (np.int32, np.float32), (np.complex128, np.float64)])
+def test_dtype_c2r(dtype, target):
+    inf_type = librosa.util.dtype_c2r(dtype)
+
+    # better to do a bidirectional subtype test than strict equality here
+    assert np.issubdtype(inf_type, target) and np.issubdtype(target, inf_type)

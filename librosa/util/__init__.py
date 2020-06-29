@@ -43,6 +43,8 @@ Miscellaneous
     peak_pick
     nnls
     cyclic_gradient
+    dtype_c2r
+    dtype_r2c
 
 
 Input validation
@@ -61,8 +63,20 @@ File operations
 .. autosummary::
     :toctree: generated/
 
-    example_audio_file
+    example
+    example_info
+    list_examples
     find_files
+
+
+Deprecated
+----------
+
+.. autosummary::
+    :toctree: generated/
+
+    example_audio_file
+
 """
 
 from .utils import *  # pylint: disable=wildcard-import

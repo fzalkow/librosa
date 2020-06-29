@@ -40,6 +40,7 @@ from .util.exceptions import ParameterError
 from .filters import get_window
 
 __all__ = ['dtw',
+           'dtw_backtracking',
            'rqa',
            'viterbi',
            'viterbi_discriminative',
@@ -52,13 +53,13 @@ __all__ = ['dtw',
 
 def dtw(X=None, Y=None, C=None, metric='euclidean', step_sizes_sigma=None,
         weights_add=None, weights_mul=None, subseq=False, backtrack=True,
-        global_constraints=False, band_rad=0.25):
+        global_constraints=False, band_rad=0.25, return_steps=False):
     '''Dynamic time warping (DTW).
 
     This function performs a DTW and path backtracking on two sequences.
-    We follow the nomenclature and algorithmic approach as described in [1]_.
+    We follow the nomenclature and algorithmic approach as described in [#]_.
 
-    .. [1] Meinard Mueller
+    .. [#] Meinard Mueller
            Fundamentals of Music Processing — Audio, Analysis, Algorithms, Applications
            Springer Verlag, ISBN: 978-3-319-21944-8, 2015.
 
@@ -87,30 +88,39 @@ def dtw(X=None, Y=None, C=None, metric='euclidean', step_sizes_sigma=None,
     weights_mul : np.ndarray [shape=[n, ]]
         Multiplicative weights to penalize certain step sizes.
 
-    subseq : binary
+    subseq : bool
         Enable subsequence DTW, e.g., for retrieval tasks.
 
-    backtrack : binary
+    backtrack : bool
         Enable backtracking in accumulated cost matrix.
 
-    global_constraints : binary
+    global_constraints : bool
         Applies global constraints to the cost matrix ``C`` (Sakoe-Chiba band).
 
     band_rad : float
         The Sakoe-Chiba band radius (1/2 of the width) will be
         ``int(radius*min(C.shape))``.
 
+    return_steps : bool
+        If true, the function returns ``steps``, the step matrix, containing
+        the indices of the used steps from the cost accumulation step.
+
     Returns
     -------
-    D : np.ndarray [shape=(N,M)]
+    D : np.ndarray [shape=(N, M)]
         accumulated cost matrix.
-        D[N,M] is the total alignment cost.
+        D[N, M] is the total alignment cost.
         When doing subsequence DTW, D[N,:] indicates a matching function.
 
-    wp : np.ndarray [shape=(N,2)]
+    wp : np.ndarray [shape=(N, 2)]
         Warping path with index pairs.
-        Each row of the array contains an index pair n,m).
+        Each row of the array contains an index pair (n, m).
         Only returned when ``backtrack`` is True.
+
+    steps : np.ndarray [shape=(N, M)]
+        Step matrix, containing the indices of the used steps from the cost
+        accumulation step.
+        Only returned when ``return_steps`` is True.
 
     Raises
     ------
@@ -126,23 +136,21 @@ def dtw(X=None, Y=None, C=None, metric='euclidean', step_sizes_sigma=None,
     --------
     >>> import numpy as np
     >>> import matplotlib.pyplot as plt
-    >>> y, sr = librosa.load(librosa.util.example_audio_file(), offset=10, duration=15)
+    >>> y, sr = librosa.load(librosa.ex('brahms'), offset=10, duration=15)
     >>> X = librosa.feature.chroma_cens(y=y, sr=sr)
     >>> noise = np.random.rand(X.shape[0], 200)
     >>> Y = np.concatenate((noise, noise, X, noise), axis=1)
     >>> D, wp = librosa.sequence.dtw(X, Y, subseq=True)
-    >>> plt.subplot(2, 1, 1)
-    >>> librosa.display.specshow(D, x_axis='frames', y_axis='frames')
-    >>> plt.title('Database excerpt')
-    >>> plt.plot(wp[:, 1], wp[:, 0], label='Optimal path', color='y')
-    >>> plt.legend()
-    >>> plt.subplot(2, 1, 2)
-    >>> plt.plot(D[-1, :] / wp.shape[0])
-    >>> plt.xlim([0, Y.shape[1]])
-    >>> plt.ylim([0, 2])
-    >>> plt.title('Matching cost function')
-    >>> plt.tight_layout()
-    >>> plt.show()
+    >>> fig, ax = plt.subplots(nrows=2, sharex=True)
+    >>> img = librosa.display.specshow(D, x_axis='frames', y_axis='frames',
+    ...                                ax=ax[0])
+    >>> ax[0].set(title='DTW cost', xlabel='Noisy sequence', ylabel='Target')
+    >>> ax[0].plot(wp[:, 1], wp[:, 0], label='Optimal path', color='y')
+    >>> ax[0].legend()
+    >>> fig.colorbar(img, ax=ax[0])
+    >>> ax[1].plot(D[-1, :] / wp.shape[0])
+    >>> ax[1].set(xlim=[0, Y.shape[1]], ylim=[0, 2],
+    ...           title='Matching cost function')
     '''
     # Default Parameters
     default_steps = np.array([[1, 1], [0, 1], [1, 0]], dtype=np.int)
@@ -249,37 +257,36 @@ def dtw(X=None, Y=None, C=None, metric='euclidean', step_sizes_sigma=None,
 
     # initialize step matrix with -1
     # will be filled in calc_accu_cost() with indices from step_sizes_sigma
-    D_steps = np.zeros(D.shape, dtype=np.int)
+    steps = np.zeros(D.shape, dtype=np.int)
 
     # these steps correspond to left- (first row) and up-(first column) moves
-    D_steps[0, :] = 1
-    D_steps[:, 0] = 2
+    steps[0, :] = 1
+    steps[:, 0] = 2
 
     # calculate accumulated cost matrix
-    D, D_steps = __dtw_calc_accu_cost(C, D, D_steps,
-                                      step_sizes_sigma,
-                                      weights_mul, weights_add,
-                                      max_0, max_1)
+    D, steps = __dtw_calc_accu_cost(C, D, steps,
+                                    step_sizes_sigma,
+                                    weights_mul, weights_add,
+                                    max_0, max_1)
 
     # delete infinity rows and columns
     D = D[max_0:, max_1:]
-    D_steps = D_steps[max_0:, max_1:]
+    steps = steps[max_0:, max_1:]
 
     if backtrack:
         if subseq:
             if np.all(np.isinf(D[-1])):
                 raise ParameterError('No valid sub-sequence warping path could '
                                      'be constructed with the given step sizes.')
-            # search for global minimum in last row of D-matrix
-            wp_end_idx = np.argmin(D[-1, :]) + 1
-            wp = __dtw_backtracking(D_steps[:, :wp_end_idx], step_sizes_sigma, subseq)
+            start = np.argmin(D[-1, :])
+            wp = __dtw_backtracking(steps, step_sizes_sigma, subseq, start)
         else:
             # perform warping path backtracking
             if np.isinf(D[-1, -1]):
                 raise ParameterError('No valid sub-sequence warping path could '
                                      'be constructed with the given step sizes.')
 
-            wp = __dtw_backtracking(D_steps, step_sizes_sigma, subseq)
+            wp = __dtw_backtracking(steps, step_sizes_sigma, subseq)
             if wp[-1] != (0, 0):
                 raise ParameterError('Unable to compute a full DTW warping path. '
                                      'You may want to try again with subseq=True.')
@@ -293,13 +300,21 @@ def dtw(X=None, Y=None, C=None, metric='euclidean', step_sizes_sigma=None,
                 C.shape[0] > C.shape[1]
         ):
             wp = np.fliplr(wp)
-        return D, wp
+        return_values = [D, wp]
     else:
-        return D
+        return_values = [D]
+
+    if return_steps:
+        return_values.append(steps)
+
+    if len(return_values) > 1:
+        return tuple(return_values)
+    else:
+        return return_values[0]
 
 
 @jit(nopython=True, cache=True)
-def __dtw_calc_accu_cost(C, D, D_steps, step_sizes_sigma,
+def __dtw_calc_accu_cost(C, D, steps, step_sizes_sigma,
                          weights_mul, weights_add, max_0, max_1):  # pragma: no cover
     '''Calculate the accumulated cost matrix D.
 
@@ -313,8 +328,9 @@ def __dtw_calc_accu_cost(C, D, D_steps, step_sizes_sigma,
     D : np.ndarray [shape=(N, M)]
         accumulated cost matrix
 
-    D_steps : np.ndarray [shape=(N, M)]
-        steps which were used for calculating D
+    steps : np.ndarray [shape=(N, M)]
+        Step matrix, containing the indices of the used steps from the cost
+        accumulation step.
 
     step_sizes_sigma : np.ndarray [shape=[n, 2]]
         Specifies allowed step sizes as used by the dtw.
@@ -333,13 +349,14 @@ def __dtw_calc_accu_cost(C, D, D_steps, step_sizes_sigma,
 
     Returns
     -------
-    D : np.ndarray [shape=(N,M)]
+    D : np.ndarray [shape=(N, M)]
         accumulated cost matrix.
-        D[N,M] is the total alignment cost.
+        D[N, M] is the total alignment cost.
         When doing subsequence DTW, D[N,:] indicates a matching function.
 
-    D_steps : np.ndarray [shape=(N,M)]
-        steps which were used for calculating D.
+    steps : np.ndarray [shape=(N, M)]
+        Step matrix, containing the indices of the used steps from the cost
+        accumulation step.
 
     See Also
     --------
@@ -361,13 +378,13 @@ def __dtw_calc_accu_cost(C, D, D_steps, step_sizes_sigma,
                     D[cur_n, cur_m] = cur_cost
 
                     # save step-index
-                    D_steps[cur_n, cur_m] = cur_step_idx
+                    steps[cur_n, cur_m] = cur_step_idx
 
-    return D, D_steps
+    return D, steps
 
 
 @jit(nopython=True, cache=True)
-def __dtw_backtracking(D_steps, step_sizes_sigma, subseq):  # pragma: no cover
+def __dtw_backtracking(steps, step_sizes_sigma, subseq, start=None):  # pragma: no cover
     '''Backtrack optimal warping path.
 
     Uses the saved step sizes from the cost accumulation
@@ -377,29 +394,37 @@ def __dtw_backtracking(D_steps, step_sizes_sigma, subseq):  # pragma: no cover
 
     Parameters
     ----------
-    D_steps : np.ndarray [shape=(N, M)]
-        Saved indices of the used steps used in the calculation of D.
+    steps : np.ndarray [shape=(N, M)]
+        Step matrix, containing the indices of the used steps from the cost
+        accumulation step.
 
     step_sizes_sigma : np.ndarray [shape=[n, 2]]
         Specifies allowed step sizes as used by the dtw.
 
-    subseq : binary
+    subseq : bool
         Enable subsequence DTW, e.g., for retrieval tasks.
+
+    start : int
+        Start column index for backtraing (only allowed for ``subseq=True``)
 
     Returns
     -------
     wp : list [shape=(N,)]
         Warping path with index pairs.
         Each list entry contains an index pair
-        (n,m) as a tuple
+        (n, m) as a tuple
 
     See Also
     --------
     dtw
     '''
+    if start is None:
+        cur_idx = (steps.shape[0] - 1, steps.shape[1] - 1)
+    else:
+        cur_idx = (steps.shape[0] - 1, start)
+
     wp = []
-    # Set starting point D(N,M) and append it to the path
-    cur_idx = (D_steps.shape[0] - 1, D_steps.shape[1] - 1)
+    # Set starting point D(N, M) and append it to the path
     wp.append((cur_idx[0], cur_idx[1]))
 
     # Loop backwards.
@@ -408,7 +433,7 @@ def __dtw_backtracking(D_steps, step_sizes_sigma, subseq):  # pragma: no cover
     # so we only ask to reach the first row of the matrix.
 
     while (subseq and cur_idx[0] > 0) or (not subseq and cur_idx != (0, 0)):
-        cur_step_idx = D_steps[(cur_idx[0], cur_idx[1])]
+        cur_step_idx = steps[(cur_idx[0], cur_idx[1])]
 
         # save tuple with minimal acc. cost in path
         cur_idx = (cur_idx[0] - step_sizes_sigma[cur_step_idx][0],
@@ -424,48 +449,100 @@ def __dtw_backtracking(D_steps, step_sizes_sigma, subseq):  # pragma: no cover
     return wp
 
 
+def dtw_backtracking(steps, step_sizes_sigma=None, subseq=False, start=None):
+    '''Backtrack a warping path.
+
+    Uses the saved step sizes from the cost accumulation
+    step to backtrack the index pairs for a warping path.
+
+
+    Parameters
+    ----------
+    steps : np.ndarray [shape=(N, M)]
+        Step matrix, containing the indices of the used steps from the cost
+        accumulation step.
+
+    step_sizes_sigma : np.ndarray [shape=[n, 2]]
+        Specifies allowed step sizes as used by the dtw.
+
+    subseq : bool
+        Enable subsequence DTW, e.g., for retrieval tasks.
+
+    start : int
+        Start column index for backtraing (only allowed for ``subseq=True``)
+
+    Returns
+    -------
+    wp : list [shape=(N,)]
+        Warping path with index pairs.
+        Each list entry contains an index pair
+        (n, m) as a tuple
+
+    See Also
+    --------
+    dtw
+    '''
+    if subseq is False and start is not None:
+        raise ParameterError('start is only allowed to be set if subseq is True '
+                             '(start={}, subseq={})'.format(start, subseq))
+
+    # Default Parameters
+    default_steps = np.array([[1, 1], [0, 1], [1, 0]], dtype=np.int)
+
+    if step_sizes_sigma is None:
+        # Use the default steps
+        step_sizes_sigma = default_steps
+    else:
+        # Append custom steps and weights to our defaults
+        step_sizes_sigma = np.concatenate((default_steps, step_sizes_sigma))
+
+    wp = __dtw_backtracking(steps, step_sizes_sigma, subseq, start)
+    return np.asarray(wp, dtype=int)
+
+
 def rqa(sim, gap_onset=1, gap_extend=1, knight_moves=True, backtrack=True):
     '''Recurrence quantification analysis (RQA)
 
     This function implements different forms of RQA as described by
-    Serra, Serra, and Andrzejak [1]_.  These methods take as input
-    a self- or cross-similarity matrix `sim`, and calculate the value
+    Serra, Serra, and Andrzejak (SSA). [#]_  These methods take as input
+    a self- or cross-similarity matrix ``sim``, and calculate the value
     of path alignments by dynamic programming.
 
     Note that unlike dynamic time warping (`dtw`), alignment paths here are
     maximized, not minimized, so the input should measure similarity rather
     than distance.
 
-    The simplest RQA method, denoted as `L` [1]_ (equation 3) and equivalent
-    to the method described by Eckman, Kamphorst, and Ruelle [2]_, accumulates
+    The simplest RQA method, denoted as `L` (SSA equation 3) and equivalent
+    to the method described by Eckman, Kamphorst, and Ruelle [#]_, accumulates
     the length of diagonal paths with positive values in the input:
 
-        - `score[i, j] = score[i-1, j-1] + 1`  if `sim[i, j] > 0`
-        - `score[i, j] = 0` otherwise.
+        - ``score[i, j] = score[i-1, j-1] + 1``  if ``sim[i, j] > 0``
+        - ``score[i, j] = 0`` otherwise.
 
-    The second method, denoted as `S` [1]_ (equation 4), is similar to the first,
+    The second method, denoted as `S` (SSA equation 4), is similar to the first,
     but allows for "knight moves" (as in the chess piece) in addition to strict
     diagonal moves:
 
-        - `score[i, j] = max(score[i-1, j-1], score[i-2, j-1], score[i-1, j-2]) + 1`  if `sim[i, j] > 0`
-        - `score[i, j] = 0` otherwise.
+        - ``score[i, j] = max(score[i-1, j-1], score[i-2, j-1], score[i-1, j-2]) + 1``  if ``sim[i, j] >
+          0``
+        - ``score[i, j] = 0`` otherwise.
 
-    The third method, denoted as `Q` [1]_ (equations 5 and 6) extends this by
+    The third method, denoted as `Q` (SSA equations 5 and 6) extends this by
     allowing gaps in the alignment that incur some cost, rather than a hard
-    reset to 0 whenever `sim[i, j] == 0`.
-    Gaps are penalized by two additional parameters, `gap_onset` and `gap_extend`,
+    reset to 0 whenever ``sim[i, j] == 0``.
+    Gaps are penalized by two additional parameters, ``gap_onset`` and ``gap_extend``,
     which are subtracted from the value of the alignment path every time a gap
     is introduced or extended (respectively).
 
-    Note that setting `gap_onset` and `gap_extend` to `np.inf` recovers the second
+    Note that setting ``gap_onset`` and ``gap_extend`` to `np.inf` recovers the second
     method, and disabling knight moves recovers the first.
 
 
-    .. [1] Serrà, Joan, Xavier Serra, and Ralph G. Andrzejak.
+    .. [#] Serrà, Joan, Xavier Serra, and Ralph G. Andrzejak.
         "Cross recurrence quantification for cover song identification."
         New Journal of Physics 11, no. 9 (2009): 093017.
 
-    .. [2] Eckmann, J. P., S. Oliffson Kamphorst, and D. Ruelle.
+    .. [#] Eckmann, J. P., S. Oliffson Kamphorst, and D. Ruelle.
         "Recurrence plots of dynamical systems."
         World Scientific Series on Nonlinear Science Series A 16 (1995): 441-446.
 
@@ -485,32 +562,32 @@ def rqa(sim, gap_onset=1, gap_extend=1, knight_moves=True, backtrack=True):
         Penalty for extending a gap in an alignment sequence
 
     knight_moves : bool
-        If `True` (default), allow for "knight moves" in the alignment,
-        e.g., `(n, m) => (n + 1, m + 2)` or `(n + 2, m + 1)`.
+        If ``True`` (default), allow for "knight moves" in the alignment,
+        e.g., ``(n, m) => (n + 1, m + 2)`` or ``(n + 2, m + 1)``.
 
-        If `False`, only allow for diagonal moves `(n, m) => (n + 1, m + 1)`.
+        If ``False``, only allow for diagonal moves ``(n, m) => (n + 1, m + 1)``.
 
     backtrack : bool
-        If `True`, return the alignment path.
+        If ``True``, return the alignment path.
 
-        If `False`, only return the score matrix.
+        If ``False``, only return the score matrix.
 
     Returns
     -------
     score : np.ndarray [shape=(N, M)]
-        The alignment score matrix.  `score[n, m]` is the cumulative value of
-        the best alignment sequence ending in frames `n` and `m`.
+        The alignment score matrix.  ``score[n, m]`` is the cumulative value of
+        the best alignment sequence ending in frames ``n`` and ``m``.
 
     path : np.ndarray [shape=(k, 2)] (optional)
-        If `backtrack=True`, `path` contains a list of pairs of aligned frames
+        If ``backtrack=True``, ``path`` contains a list of pairs of aligned frames
         in the best alignment sequence.
 
-        `path[i] = [n, m]` indicates that row `n` aligns to column `m`.
+        ``path[i] = [n, m]`` indicates that row ``n`` aligns to column ``m``.
 
     See Also
     --------
-    segment.recurrence_matrix
-    segment.cross_similarity
+    librosa.segment.recurrence_matrix
+    librosa.segment.cross_similarity
     dtw
 
     Examples
@@ -519,11 +596,10 @@ def rqa(sim, gap_onset=1, gap_extend=1, knight_moves=True, backtrack=True):
 
     >>> import numpy as np
     >>> import matplotlib.pyplot as plt
-    >>> y, sr = librosa.load(librosa.util.example_audio_file(),
-    ...                      offset=10, duration=30)
+    >>> y, sr = librosa.load(librosa.ex('nutcracker'), duration=30)
     >>> chroma = librosa.feature.chroma_cqt(y=y, sr=sr)
     >>> # Use time-delay embedding to reduce noise
-    >>> chroma_stack = librosa.feature.stack_memory(chroma, n_steps=3)
+    >>> chroma_stack = librosa.feature.stack_memory(chroma, n_steps=10, delay=3)
     >>> # Build recurrence, suppress self-loops within 1 second
     >>> rec = librosa.segment.recurrence_matrix(chroma_stack, width=43,
     ...                                         mode='affinity',
@@ -531,35 +607,27 @@ def rqa(sim, gap_onset=1, gap_extend=1, knight_moves=True, backtrack=True):
     >>> # using infinite cost for gaps enforces strict path continuation
     >>> L_score, L_path = librosa.sequence.rqa(rec, np.inf, np.inf,
     ...                                        knight_moves=False)
-    >>> plt.figure(figsize=(10, 4))
-    >>> plt.subplot(1,2,1)
-    >>> librosa.display.specshow(rec, x_axis='frames', y_axis='frames')
-    >>> plt.title('Recurrence matrix')
-    >>> plt.colorbar()
-    >>> plt.subplot(1,2,2)
-    >>> librosa.display.specshow(L_score, x_axis='frames', y_axis='frames')
-    >>> plt.title('Alignment score matrix')
-    >>> plt.colorbar()
-    >>> plt.plot(L_path[:, 1], L_path[:, 0], label='Optimal path', color='c')
-    >>> plt.legend()
-    >>> plt.show()
+    >>> fig, ax = plt.subplots(ncols=2)
+    >>> librosa.display.specshow(rec, x_axis='frames', y_axis='frames', ax=ax[0])
+    >>> ax[0].set(title='Recurrence matrix')
+    >>> librosa.display.specshow(L_score, x_axis='frames', y_axis='frames', ax=ax[1])
+    >>> ax[1].set(title='Alignment score matrix')
+    >>> ax[1].plot(L_path[:, 1], L_path[:, 0], label='Optimal path', color='c')
+    >>> ax[1].legend()
+    >>> ax[1].label_outer()
 
     Full alignment using gaps and knight moves
 
     >>> # New gaps cost 5, extending old gaps cost 10 for each step
     >>> score, path = librosa.sequence.rqa(rec, 5, 10)
-    >>> plt.figure(figsize=(10, 4))
-    >>> plt.subplot(1,2,1)
-    >>> librosa.display.specshow(rec, x_axis='frames', y_axis='frames')
-    >>> plt.title('Recurrence matrix')
-    >>> plt.colorbar()
-    >>> plt.subplot(1,2,2)
-    >>> librosa.display.specshow(score, x_axis='frames', y_axis='frames')
-    >>> plt.title('Alignment score matrix')
-    >>> plt.plot(path[:, 1], path[:, 0], label='Optimal path', color='c')
-    >>> plt.colorbar()
-    >>> plt.legend()
-    >>> plt.show()
+    >>> fig, ax = plt.subplots(ncols=2, sharex=True, sharey=True)
+    >>> librosa.display.specshow(rec, x_axis='frames', y_axis='frames', ax=ax[0])
+    >>> ax[0].set(title='Recurrence matrix')
+    >>> librosa.display.specshow(score, x_axis='frames', y_axis='frames', ax=ax[1])
+    >>> ax[1].set(title='Alignment score matrix')
+    >>> ax[1].plot(path[:, 1], path[:, 0], label='Optimal path', color='c')
+    >>> ax[1].legend()
+    >>> ax[1].label_outer()
     '''
 
     if gap_onset < 0:
@@ -777,12 +845,12 @@ def _viterbi(log_prob, log_trans, log_p_init, state, value, ptr):  # pragma: no 
     Parameters
     ----------
     log_prob : np.ndarray [shape=(T, m)]
-        `log_prob[t, s]` is the conditional log-likelihood
-        log P[X = X(t) | State(t) = s]
+        ``log_prob[t, s]`` is the conditional log-likelihood
+        ``log P[X = X(t) | State(t) = s]``
 
     log_trans : np.ndarray [shape=(m, m)]
         The log transition matrix
-        `log_trans[i, j]` = log P[State(t+1) = j | State(t) = i]
+        ``log_trans[i, j] = log P[State(t+1) = j | State(t) = i]``
 
     log_p_init : np.ndarray [shape=(m,)]
         log of the initial state distribution
@@ -799,7 +867,7 @@ def _viterbi(log_prob, log_trans, log_p_init, state, value, ptr):  # pragma: no 
     Returns
     -------
     None
-        All computations are performed in-place on `state, value, ptr`.
+        All computations are performed in-place on ``state, value, ptr``.
     '''
     n_steps, n_states = log_prob.shape
 
@@ -837,25 +905,25 @@ def _viterbi(log_prob, log_trans, log_p_init, state, value, ptr):  # pragma: no 
 def viterbi(prob, transition, p_init=None, return_logp=False):
     '''Viterbi decoding from observation likelihoods.
 
-    Given a sequence of observation likelihoods `prob[s, t]`,
+    Given a sequence of observation likelihoods ``prob[s, t]``,
     indicating the conditional likelihood of seeing the observation
-    at time `t` from state `s`, and a transition matrix
-    `transition[i, j]` which encodes the conditional probability of
-    moving from state `i` to state `j`, the Viterbi algorithm [1]_ computes
+    at time ``t`` from state ``s``, and a transition matrix
+    ``transition[i, j]`` which encodes the conditional probability of
+    moving from state ``i`` to state ``j``, the Viterbi algorithm [#]_ computes
     the most likely sequence of states from the observations.
 
-    .. [1] Viterbi, Andrew. "Error bounds for convolutional codes and an
+    .. [#] Viterbi, Andrew. "Error bounds for convolutional codes and an
         asymptotically optimum decoding algorithm."
         IEEE transactions on Information Theory 13.2 (1967): 260-269.
 
     Parameters
     ----------
     prob : np.ndarray [shape=(n_states, n_steps), non-negative]
-        `prob[s, t]` is the probability of observation at time `t`
-        being generated by state `s`.
+        ``prob[s, t]`` is the probability of observation at time ``t``
+        being generated by state ``s``.
 
     transition : np.ndarray [shape=(n_states, n_states), non-negative]
-        `transition[i, j]` is the probability of a transition from i->j.
+        ``transition[i, j]`` is the probability of a transition from i->j.
         Each row must sum to 1.
 
     p_init : np.ndarray [shape=(n_states,)]
@@ -863,17 +931,17 @@ def viterbi(prob, transition, p_init=None, return_logp=False):
         If not provided, a uniform distribution is assumed.
 
     return_logp : bool
-        If `True`, return the log-likelihood of the state sequence.
+        If ``True``, return the log-likelihood of the state sequence.
 
     Returns
     -------
-    Either `states` or `(states, logp)`:
+    Either ``states`` or ``(states, logp)``:
 
     states : np.ndarray [shape=(n_steps,)]
         The most likely state sequence.
 
     logp : scalar [float]
-        If `return_logp=True`, the log probability of `states` given
+        If ``return_logp=True``, the log probability of ``states`` given
         the observations.
 
     See Also
@@ -956,28 +1024,28 @@ def viterbi(prob, transition, p_init=None, return_logp=False):
 def viterbi_discriminative(prob, transition, p_state=None, p_init=None, return_logp=False):
     '''Viterbi decoding from discriminative state predictions.
 
-    Given a sequence of conditional state predictions `prob[s, t]`,
-    indicating the conditional likelihood of state `s` given the
-    observation at time `t`, and a transition matrix `transition[i, j]`
-    which encodes the conditional probability of moving from state `i`
-    to state `j`, the Viterbi algorithm computes the most likely sequence
+    Given a sequence of conditional state predictions ``prob[s, t]``,
+    indicating the conditional likelihood of state ``s`` given the
+    observation at time ``t``, and a transition matrix ``transition[i, j]``
+    which encodes the conditional probability of moving from state ``i``
+    to state ``j``, the Viterbi algorithm computes the most likely sequence
     of states from the observations.
 
     This implementation uses the standard Viterbi decoding algorithm
     for observation likelihood sequences, under the assumption that
-    `P[Obs(t) | State(t) = s]` is proportional to
-    `P[State(t) = s | Obs(t)] / P[State(t) = s]`, where the denominator
-    is the marginal probability of state `s` occurring as given by `p_state`.
+    ``P[Obs(t) | State(t) = s]`` is proportional to
+    ``P[State(t) = s | Obs(t)] / P[State(t) = s]``, where the denominator
+    is the marginal probability of state ``s`` occurring as given by ``p_state``.
 
     Parameters
     ----------
     prob : np.ndarray [shape=(n_states, n_steps), non-negative]
-        `prob[s, t]` is the probability of state `s` conditional on
-        the observation at time `t`.
+        ``prob[s, t]`` is the probability of state ``s`` conditional on
+        the observation at time ``t``.
         Must be non-negative and sum to 1 along each column.
 
     transition : np.ndarray [shape=(n_states, n_states), non-negative]
-        `transition[i, j]` is the probability of a transition from i->j.
+        ``transition[i, j]`` is the probability of a transition from i->j.
         Each row must sum to 1.
 
     p_state : np.ndarray [shape=(n_states,)]
@@ -990,17 +1058,17 @@ def viterbi_discriminative(prob, transition, p_state=None, p_init=None, return_l
         If not provided, it is assumed to be uniform.
 
     return_logp : bool
-        If `True`, return the log-likelihood of the state sequence.
+        If ``True``, return the log-likelihood of the state sequence.
 
     Returns
     -------
-    Either `states` or `(states, logp)`:
+    Either ``states`` or ``(states, logp)``:
 
     states : np.ndarray [shape=(n_steps,)]
         The most likely state sequence.
 
     logp : scalar [float]
-        If `return_logp=True`, the log probability of `states` given
+        If ``return_logp=True``, the log probability of ``states`` given
         the observations.
 
     See Also
@@ -1035,10 +1103,10 @@ def viterbi_discriminative(prob, transition, p_state=None, p_init=None, return_l
     >>> trans = librosa.sequence.transition_loop(25, 0.9)
 
     >>> # Load in audio and make features
-    >>> y, sr = librosa.load(librosa.util.example_audio_file())
+    >>> y, sr = librosa.load(librosa.ex('nutcracker'), duration=30)
     >>> # Suppress percussive elements
     >>> y = librosa.effects.harmonic(y, margin=4)
-    >>> chroma = librosa.feature.chroma_cens(y=y, sr=sr, bins_per_octave=36)
+    >>> chroma = librosa.feature.chroma_cqt(y=y, sr=sr)
     >>> # Map chroma (observations) to class (state) likelihoods
     >>> probs = np.exp(weights.dot(chroma))  # P[class | chroma] ~= exp(template' chroma)
     >>> probs /= probs.sum(axis=0, keepdims=True)  # probabilities must sum to 1 in each column
@@ -1049,33 +1117,22 @@ def viterbi_discriminative(prob, transition, p_state=None, p_init=None, return_l
 
     >>> # Plot the features and prediction map
     >>> import matplotlib.pyplot as plt
-    >>> plt.figure(figsize=(10, 6))
-    >>> plt.subplot(2,1,1)
-    >>> librosa.display.specshow(chroma, x_axis='time', y_axis='chroma')
-    >>> plt.colorbar()
-    >>> plt.subplot(2,1,2)
-    >>> librosa.display.specshow(weights, x_axis='chroma')
-    >>> plt.yticks(np.arange(25) + 0.5, labels)
-    >>> plt.ylabel('Chord')
-    >>> plt.colorbar()
-    >>> plt.tight_layout()
-    >>> plt.show()
+    >>> fig, ax = plt.subplots(nrows=2)
+    >>> librosa.display.specshow(chroma, x_axis='time', y_axis='chroma', ax=ax[0])
+    >>> librosa.display.specshow(weights, x_axis='chroma', ax=ax[1])
+    >>> ax[1].set(yticks=np.arange(25) + 0.5, yticklabels=labels, ylabel='Chord')
 
     >>> # And plot the results
-    >>> plt.figure(figsize=(10, 4))
-    >>> librosa.display.specshow(probs, x_axis='time', cmap='gray')
-    >>> plt.colorbar()
+    >>> fig, ax = plt.subplots()
+    >>> librosa.display.specshow(probs, x_axis='time', cmap='gray', ax=ax)
     >>> times = librosa.times_like(chords_vit)
-    >>> plt.scatter(times, chords_ind + 0.75, color='lime', alpha=0.5, marker='+',
-    ...             s=15, label='Independent')
-    >>> plt.scatter(times, chords_vit + 0.25, color='deeppink', alpha=0.5, marker='o',
-    ...             s=15, label='Viterbi')
-    >>> plt.yticks(0.5 + np.unique(chords_vit),
-    ...            [labels[i] for i in np.unique(chords_vit)], va='center')
-    >>> plt.legend()
-    >>> plt.tight_layout()
-    >>> plt.show()
-
+    >>> ax.scatter(times, chords_ind + 0.75, color='lime', alpha=0.5, marker='+',
+    ...            s=15, label='Independent')
+    >>> ax.scatter(times, chords_vit + 0.25, color='deeppink', alpha=0.5, marker='o',
+    ...            s=15, label='Viterbi')
+    >>> ax.set(yticks=0.5 + np.unique(chords_vit),
+    ...        yticklabels=[labels[i] for i in np.unique(chords_vit)])
+    >>> ax.legend()
     '''
 
     n_states, n_steps = prob.shape
@@ -1143,11 +1200,11 @@ def viterbi_discriminative(prob, transition, p_state=None, p_init=None, return_l
 def viterbi_binary(prob, transition, p_state=None, p_init=None, return_logp=False):
     '''Viterbi decoding from binary (multi-label), discriminative state predictions.
 
-    Given a sequence of conditional state predictions `prob[s, t]`,
-    indicating the conditional likelihood of state `s` being active
-    conditional on observation at time `t`, and a 2*2 transition matrix
-    `transition` which encodes the conditional probability of moving from
-    state `s` to state `~s` (not-`s`), the Viterbi algorithm computes the
+    Given a sequence of conditional state predictions ``prob[s, t]``,
+    indicating the conditional likelihood of state ``s`` being active
+    conditional on observation at time ``t``, and a 2*2 transition matrix
+    ``transition`` which encodes the conditional probability of moving from
+    state ``s`` to state ``~s`` (not-``s``), the Viterbi algorithm computes the
     most likely sequence of states from the observations.
 
     This function differs from `viterbi_discriminative` in that it does not assume the
@@ -1155,26 +1212,26 @@ def viterbi_binary(prob, transition, p_state=None, p_init=None, return_logp=Fals
     transforming the multi-label decoding problem to a collection
     of binary Viterbi problems (one for each *state* or label).
 
-    The output is a binary matrix `states[s, t]` indicating whether each
-    state `s` is active at time `t`.
+    The output is a binary matrix ``states[s, t]`` indicating whether each
+    state ``s`` is active at time ``t``.
 
     Parameters
     ----------
     prob : np.ndarray [shape=(n_steps,) or (n_states, n_steps)], non-negative
-        `prob[s, t]` is the probability of state `s` being active
-        conditional on the observation at time `t`.
+        ``prob[s, t]`` is the probability of state ``s`` being active
+        conditional on the observation at time ``t``.
         Must be non-negative and less than 1.
 
-        If `prob` is 1-dimensional, it is expanded to shape `(1, n_steps)`.
+        If ``prob`` is 1-dimensional, it is expanded to shape ``(1, n_steps)``.
 
     transition : np.ndarray [shape=(2, 2) or (n_states, 2, 2)], non-negative
         If 2-dimensional, the same transition matrix is applied to each sub-problem.
-        `transition[0, i]` is the probability of the state going from inactive to `i`,
-        `transition[1, i]` is the probability of the state going from active to `i`.
+        ``transition[0, i]`` is the probability of the state going from inactive to ``i``,
+        ``transition[1, i]`` is the probability of the state going from active to ``i``.
         Each row must sum to 1.
 
-        If 3-dimensional, `transition[s]` is interpreted as the 2x2 transition matrix
-        for state label `s`.
+        If 3-dimensional, ``transition[s]`` is interpreted as the 2x2 transition matrix
+        for state label ``s``.
 
     p_state : np.ndarray [shape=(n_states,)]
         Optional: marginal probability for each state (between [0,1]).
@@ -1186,18 +1243,18 @@ def viterbi_binary(prob, transition, p_state=None, p_init=None, return_logp=Fals
         If not provided, it is assumed to be uniform.
 
     return_logp : bool
-        If `True`, return the log-likelihood of the state sequence.
+        If ``True``, return the log-likelihood of the state sequence.
 
     Returns
     -------
-    Either `states` or `(states, logp)`:
+    Either ``states`` or ``(states, logp)``:
 
     states : np.ndarray [shape=(n_states, n_steps)]
         The most likely state sequence.
 
     logp : np.ndarray [shape=(n_states,)]
-        If `return_logp=True`, the log probability of each state activation
-        sequence `states`
+        If ``return_logp=True``, the log probability of each state activation
+        sequence ``states``
 
     See Also
     --------
@@ -1230,7 +1287,7 @@ def viterbi_binary(prob, transition, p_state=None, p_init=None, return_logp=Fals
     if transition.shape == (2, 2):
         transition = np.tile(transition, (n_states, 1, 1))
     elif transition.shape != (n_states, 2, 2):
-        raise ParameterError('transition.shape={}, must be (2,2) or '
+        raise ParameterError('transition.shape={}, must be (2, 2) or '
                              '(n_states, 2, 2)={}'.format(transition.shape, (n_states)))
 
     if np.any(transition < 0) or not np.allclose(transition.sum(axis=-1), 1):
@@ -1288,7 +1345,7 @@ def viterbi_binary(prob, transition, p_state=None, p_init=None, return_logp=Fals
 
 
 def transition_uniform(n_states):
-    '''Construct a uniform transition matrix over `n_states`.
+    '''Construct a uniform transition matrix over ``n_states``.
 
     Parameters
     ----------
@@ -1298,7 +1355,7 @@ def transition_uniform(n_states):
     Returns
     -------
     transition : np.ndarray [shape=(n_states, n_states)]
-        `transition[i, j] = 1./n_states`
+        ``transition[i, j] = 1./n_states``
 
     Examples
     --------
@@ -1318,12 +1375,12 @@ def transition_uniform(n_states):
 
 
 def transition_loop(n_states, prob):
-    '''Construct a self-loop transition matrix over `n_states`.
+    '''Construct a self-loop transition matrix over ``n_states``.
 
     The transition matrix will have the following properties:
 
-        - `transition[i, i] = p` for all i
-        - `transition[i, j] = (1 - p) / (n_states - 1)` for all `j != i`
+        - ``transition[i, i] = p`` for all ``i``
+        - ``transition[i, j] = (1 - p) / (n_states - 1)`` for all ``j != i``
 
     This type of transition matrix is appropriate when states tend to be
     locally stable, and there is no additional structure between different
@@ -1337,7 +1394,7 @@ def transition_loop(n_states, prob):
     prob : float in [0, 1] or iterable, length=n_states
         If a scalar, this is the probability of a self-transition.
 
-        If a vector of length `n_states`, `p[i]` is the probability of state `i`'s self-transition.
+        If a vector of length ``n_states``, ``p[i]`` is the probability of self-transition in state ``i`` 
 
     Returns
     -------
@@ -1382,12 +1439,12 @@ def transition_loop(n_states, prob):
 
 
 def transition_cycle(n_states, prob):
-    '''Construct a cyclic transition matrix over `n_states`.
+    '''Construct a cyclic transition matrix over ``n_states``.
 
     The transition matrix will have the following properties:
 
-        - `transition[i, i] = p`
-        - `transition[i, i + 1] = (1 - p)`
+        - ``transition[i, i] = p``
+        - ``transition[i, i + 1] = (1 - p)``
 
     This type of transition matrix is appropriate for state spaces
     with cyclical structure, such as metrical position within a bar.
@@ -1403,8 +1460,8 @@ def transition_cycle(n_states, prob):
     prob : float in [0, 1] or iterable, length=n_states
         If a scalar, this is the probability of a self-transition.
 
-        If a vector of length `n_states`, `p[i]` is the probability of state
-        `i`'s self-transition.
+        If a vector of length ``n_states``, ``p[i]`` is the probability of
+        self-transition in state ``i``
 
     Returns
     -------
@@ -1449,9 +1506,9 @@ def transition_local(n_states, width, window='triangle', wrap=False):
 
     The transition matrix will have the following properties:
 
-        - `transition[i, j] = 0` if `|i - j| > width`
-        - `transition[i, i]` is maximal
-        - `transition[i, i - width//2 : i + width//2]` has shape `window`
+        - ``transition[i, j] = 0`` if ``|i - j| > width``
+        - ``transition[i, i]`` is maximal
+        - ``transition[i, i - width//2 : i + width//2]`` has shape ``window``
 
     This type of transition matrix is appropriate for state spaces
     that discretely approximate continuous variables, such as in fundamental
@@ -1464,7 +1521,7 @@ def transition_local(n_states, width, window='triangle', wrap=False):
 
     width : int >= 1 or iterable
         The maximum number of states to treat as "local".
-        If iterable, it should have length equal to `n_states`,
+        If iterable, it should have length equal to ``n_states``,
         and specify the width independently for each state.
 
     window : str, callable, or window specification
@@ -1473,17 +1530,17 @@ def transition_local(n_states, width, window='triangle', wrap=False):
         Any window specification supported by `filters.get_window` will work here.
 
         .. note:: Certain windows (e.g., 'hann') are identically 0 at the boundaries,
-            so and effectively have `width-2` non-zero values.  You may have to expand
-            `width` to get the desired behavior.
+            so and effectively have ``width-2`` non-zero values.  You may have to expand
+            ``width`` to get the desired behavior.
 
 
     wrap : bool
-        If `True`, then state locality `|i - j|` is computed modulo `n_states`.
-        If `False` (default), then locality is absolute.
+        If ``True``, then state locality ``|i - j|`` is computed modulo ``n_states``.
+        If ``False`` (default), then locality is absolute.
 
     See Also
     --------
-    filters.get_window
+    librosa.filters.get_window
 
     Returns
     -------
